@@ -176,6 +176,11 @@ class PairwiseExchangeApp(tk.Tk):
         ttk.Label(size_frame, text='Max iterations:').grid(row=3, column=0, sticky='w')
         self.max_iter_var = tk.IntVar(value=self.max_iterations)
         ttk.Entry(size_frame, textvariable=self.max_iter_var, width=8).grid(row=3, column=1, sticky='w')
+        # Custom distance matrix option
+        self.use_custom_dist_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(size_frame, text='Use custom distance matrix', variable=self.use_custom_dist_var).grid(row=4, column=0, columnspan=2, sticky='w')
+        self.sym_dist_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(size_frame, text='Force symmetric distances', variable=self.sym_dist_var).grid(row=5, column=0, columnspan=2, sticky='w')
 
         # Random generator
         gen_frame = ttk.LabelFrame(control_frame, text='Random Generator')
@@ -246,6 +251,18 @@ class PairwiseExchangeApp(tk.Tk):
         self.fm_inner.bind('<Configure>', lambda e: self.fm_canvas.configure(scrollregion=self.fm_canvas.bbox('all')))
 
         # Layout editor
+        # Distance matrix editor
+        dist_frame = ttk.LabelFrame(bottom_frame, text='Distance Matrix (editable)')
+        dist_frame.pack(side='left', fill='both', expand=True, padx=4)
+        self.dist_canvas = tk.Canvas(dist_frame)
+        self.dist_canvas.pack(side='left', fill='both', expand=True)
+        self.dist_inner = ttk.Frame(self.dist_canvas)
+        self.dist_scroll = ttk.Scrollbar(dist_frame, orient='vertical', command=self.dist_canvas.yview)
+        self.dist_canvas.configure(yscrollcommand=self.dist_scroll.set)
+        self.dist_scroll.pack(side='right', fill='y')
+        self.dist_canvas.create_window((0,0), window=self.dist_inner, anchor='nw')
+        self.dist_inner.bind('<Configure>', lambda e: self.dist_canvas.configure(scrollregion=self.dist_canvas.bbox('all')))
+
         layout_frame = ttk.LabelFrame(bottom_frame, text='Layout Editor')
         layout_frame.pack(side='left', fill='y', padx=4)
         self.layout_vars = []
@@ -286,7 +303,9 @@ class PairwiseExchangeApp(tk.Tk):
 
     def update_distance(self):
         self.metric = self.metric_var.get()
-        self.D = compute_distance_matrix(self.positions, self.metric)
+        # Only recompute from positions when not using custom distance matrix
+        if not getattr(self, 'use_custom_dist_var', tk.BooleanVar()).get():
+            self.D = compute_distance_matrix(self.positions, self.metric)
         self.refresh_canvas()
 
     def generate_random_problem(self):
@@ -330,7 +349,9 @@ class PairwiseExchangeApp(tk.Tk):
         self.layout = arr
 
         self.positions, self.grid_rows, self.grid_cols = make_grid_positions(self.n)
-        self.D = compute_distance_matrix(self.positions, self.metric_var.get())
+        # only set computed D if not using a custom provided distance matrix
+        if not getattr(self, 'use_custom_dist_var', tk.BooleanVar()).get():
+            self.D = compute_distance_matrix(self.positions, self.metric_var.get())
 
         # reset history
         self.history = []
@@ -345,7 +366,9 @@ class PairwiseExchangeApp(tk.Tk):
         self.positions, self.grid_rows, self.grid_cols = make_grid_positions(self.n)
         self.metric = 'manhattan'
         self.metric_var.set(self.metric)
-        self.D = compute_distance_matrix(self.positions, self.metric)
+        # load D from positions unless user intends to use custom distances
+        if not getattr(self, 'use_custom_dist_var', tk.BooleanVar()).get():
+            self.D = compute_distance_matrix(self.positions, self.metric)
 
         # Example symmetric flow matrix for demo
         demo = [
@@ -366,6 +389,7 @@ class PairwiseExchangeApp(tk.Tk):
 
     def refresh_all(self):
         self.build_flow_editor()
+        self.build_distance_editor()
         self.build_layout_editor()
         self.refresh_canvas()
         self.update_swap_candidates_text()
@@ -389,6 +413,55 @@ class PairwiseExchangeApp(tk.Tk):
 
         # save button
         ttk.Button(self.fm_inner, text='Apply Flow Edits', command=self.apply_flow_edits).grid(row=2 + self.n, column=0, columnspan=self.n + 1, pady=6)
+
+    def build_distance_editor(self):
+        # clear
+        for child in self.dist_inner.winfo_children():
+            child.destroy()
+        self.dist_entries = [[None] * self.n for _ in range(self.n)]
+        # header
+        ttk.Label(self.dist_inner, text='').grid(row=0, column=0)
+        for j in range(self.n):
+            ttk.Label(self.dist_inner, text=f'P{j}').grid(row=0, column=1 + j, padx=2)
+        for i in range(self.n):
+            ttk.Label(self.dist_inner, text=f'P{i}').grid(row=1 + i, column=0, padx=2)
+            for j in range(self.n):
+                v = tk.StringVar(value=str(int(self.D[i][j]) if float(self.D[i][j]).is_integer() else f'{self.D[i][j]:.2f}'))
+                ent = ttk.Entry(self.dist_inner, textvariable=v, width=6)
+                ent.grid(row=1 + i, column=1 + j, padx=1, pady=1)
+                self.dist_entries[i][j] = v
+
+        ttk.Button(self.dist_inner, text='Apply Distance Edits', command=self.apply_distance_edits).grid(row=2 + self.n, column=0, columnspan=self.n + 1, pady=6)
+
+    def apply_distance_edits(self):
+        # parse entries; validate
+        newD = [[0.0] * self.n for _ in range(self.n)]
+        try:
+            for i in range(self.n):
+                for j in range(self.n):
+                    s = self.dist_entries[i][j].get().strip()
+                    if s == '':
+                        val = 0.0
+                    else:
+                        val = float(s)
+                    if val < 0:
+                        raise ValueError('Distances must be non-negative')
+                    newD[i][j] = val
+        except Exception as e:
+            messagebox.showerror('Invalid distances', f'Check distance values: {e}')
+            return
+
+        if self.sym_dist_var.get():
+            for i in range(self.n):
+                for j in range(i+1, self.n):
+                    avg = (newD[i][j] + newD[j][i]) / 2.0
+                    newD[i][j] = newD[j][i] = avg
+
+        self.D = newD
+        # mark that custom distances are in use
+        self.use_custom_dist_var.set(True)
+        self.update_swap_candidates_text()
+        self.status_var.set('Applied distance edits (using custom D)')
 
     def apply_flow_edits(self):
         # parse entries; validate
