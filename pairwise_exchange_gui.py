@@ -39,20 +39,26 @@ def ceil_sqrt(n):
     r = int(math.ceil(math.sqrt(n)))
     return r
 
-def make_grid_positions(n):
-    # rows = ceil(sqrt(n)); cols = ceil(n/rows)
-    rows = ceil_sqrt(n)
-    cols = int(math.ceil(n / rows))
+def make_grid_positions(n, rows=None, cols=None):
+    # If rows/cols are provided, use them (allow asymmetric layouts).
+    if rows is None and cols is None:
+        rows = ceil_sqrt(n)
+        cols = int(math.ceil(n / rows))
+    elif rows is None:
+        rows = int(math.ceil(n / cols))
+    elif cols is None:
+        cols = int(math.ceil(n / rows))
+
+    # Ensure we have enough cells
+    if rows * cols < n:
+        cols = int(math.ceil(n / rows))
+
     positions = []
     idx = 0
     for r in range(rows):
         for c in range(cols):
-            if idx < n:
-                positions.append((r, c))
-            else:
-                positions.append((r, c))
+            positions.append((r, c))
             idx += 1
-    # we only need first n positions
     return positions[:rows * cols], rows, cols
 
 def manhattan(a, b):
@@ -121,7 +127,7 @@ class PairwiseExchangeApp(tk.Tk):
         self.geometry('1200x780')
 
         # Model state
-        self.n = 8
+        self.n = 9
         self.names = [f'D{i+1}' for i in range(self.n)]
         self.positions, self.grid_rows, self.grid_cols = make_grid_positions(self.n)
         self.metric = 'manhattan'  # or 'euclidean'
@@ -163,6 +169,17 @@ class PairwiseExchangeApp(tk.Tk):
                              command=self.on_n_change)
         n_spin.grid(row=0, column=1, sticky='w')
 
+        ttk.Label(size_frame, text='Rows:').grid(row=0, column=2, sticky='w')
+        self.rows_var = tk.IntVar(value=self.grid_rows)
+        rows_spin = ttk.Spinbox(size_frame, from_=1, to=12, textvariable=self.rows_var, width=5,
+                    command=self.on_rows_cols_change)
+        rows_spin.grid(row=0, column=3, sticky='w')
+        ttk.Label(size_frame, text='Cols:').grid(row=1, column=2, sticky='w')
+        self.cols_var = tk.IntVar(value=self.grid_cols)
+        cols_spin = ttk.Spinbox(size_frame, from_=1, to=12, textvariable=self.cols_var, width=5,
+                    command=self.on_rows_cols_change)
+        cols_spin.grid(row=1, column=3, sticky='w')
+
         ttk.Label(size_frame, text='Metric:').grid(row=1, column=0, sticky='w')
         self.metric_var = tk.StringVar(value=self.metric)
         metric_combo = ttk.Combobox(size_frame, textvariable=self.metric_var,
@@ -177,7 +194,7 @@ class PairwiseExchangeApp(tk.Tk):
         self.max_iter_var = tk.IntVar(value=self.max_iterations)
         ttk.Entry(size_frame, textvariable=self.max_iter_var, width=8).grid(row=3, column=1, sticky='w')
         # Custom distance matrix option
-        self.use_custom_dist_var = tk.BooleanVar(value=False)
+        self.use_custom_dist_var = tk.BooleanVar(value=True)
         ttk.Checkbutton(size_frame, text='Use custom distance matrix', variable=self.use_custom_dist_var).grid(row=4, column=0, columnspan=2, sticky='w')
         self.sym_dist_var = tk.BooleanVar(value=True)
         ttk.Checkbutton(size_frame, text='Force symmetric distances', variable=self.sym_dist_var).grid(row=5, column=0, columnspan=2, sticky='w')
@@ -244,11 +261,16 @@ class PairwiseExchangeApp(tk.Tk):
         self.fm_canvas = tk.Canvas(fm_frame)
         self.fm_canvas.pack(side='left', fill='both', expand=True)
         self.fm_inner = ttk.Frame(self.fm_canvas)
+        # vertical + horizontal scrollbars for responsiveness
         self.fm_scroll = ttk.Scrollbar(fm_frame, orient='vertical', command=self.fm_canvas.yview)
-        self.fm_canvas.configure(yscrollcommand=self.fm_scroll.set)
+        self.fm_hscroll = ttk.Scrollbar(fm_frame, orient='horizontal', command=self.fm_canvas.xview)
+        self.fm_canvas.configure(yscrollcommand=self.fm_scroll.set, xscrollcommand=self.fm_hscroll.set)
         self.fm_scroll.pack(side='right', fill='y')
-        self.fm_canvas.create_window((0,0), window=self.fm_inner, anchor='nw')
+        self.fm_hscroll.pack(side='bottom', fill='x')
+        self.fm_window = self.fm_canvas.create_window((0,0), window=self.fm_inner, anchor='nw')
+        # keep inner sized to canvas width and update scrollregion
         self.fm_inner.bind('<Configure>', lambda e: self.fm_canvas.configure(scrollregion=self.fm_canvas.bbox('all')))
+        # do not force inner width to canvas width — allow horizontal scrolling
 
         # Layout editor
         # Distance matrix editor
@@ -258,10 +280,13 @@ class PairwiseExchangeApp(tk.Tk):
         self.dist_canvas.pack(side='left', fill='both', expand=True)
         self.dist_inner = ttk.Frame(self.dist_canvas)
         self.dist_scroll = ttk.Scrollbar(dist_frame, orient='vertical', command=self.dist_canvas.yview)
-        self.dist_canvas.configure(yscrollcommand=self.dist_scroll.set)
+        self.dist_hscroll = ttk.Scrollbar(dist_frame, orient='horizontal', command=self.dist_canvas.xview)
+        self.dist_canvas.configure(yscrollcommand=self.dist_scroll.set, xscrollcommand=self.dist_hscroll.set)
         self.dist_scroll.pack(side='right', fill='y')
-        self.dist_canvas.create_window((0,0), window=self.dist_inner, anchor='nw')
+        self.dist_hscroll.pack(side='bottom', fill='x')
+        self.dist_window = self.dist_canvas.create_window((0,0), window=self.dist_inner, anchor='nw')
         self.dist_inner.bind('<Configure>', lambda e: self.dist_canvas.configure(scrollregion=self.dist_canvas.bbox('all')))
+        # do not force inner width to canvas width — allow horizontal scrolling
 
         layout_frame = ttk.LabelFrame(bottom_frame, text='Layout Editor')
         layout_frame.pack(side='left', fill='y', padx=4)
@@ -293,6 +318,12 @@ class PairwiseExchangeApp(tk.Tk):
         self.n = v
         self.names = [f'D{i+1}' for i in range(self.n)]
         self.positions, self.grid_rows, self.grid_cols = make_grid_positions(self.n)
+        # reflect into rows/cols controls
+        try:
+            self.rows_var.set(self.grid_rows)
+            self.cols_var.set(self.grid_cols)
+        except Exception:
+            pass
         self.D = compute_distance_matrix(self.positions, self.metric_var.get())
         # reinitialize matrices and layout
         self.F = [[0.0] * self.n for _ in range(self.n)]
@@ -349,6 +380,11 @@ class PairwiseExchangeApp(tk.Tk):
         self.layout = arr
 
         self.positions, self.grid_rows, self.grid_cols = make_grid_positions(self.n)
+        try:
+            self.rows_var.set(self.grid_rows)
+            self.cols_var.set(self.grid_cols)
+        except Exception:
+            pass
         # only set computed D if not using a custom provided distance matrix
         if not getattr(self, 'use_custom_dist_var', tk.BooleanVar()).get():
             self.D = compute_distance_matrix(self.positions, self.metric_var.get())
@@ -359,29 +395,71 @@ class PairwiseExchangeApp(tk.Tk):
         self.refresh_all()
 
     def load_example_8(self):
-        # small built-in demo with n=8
-        self.n = 8
+        # Built-in demo using the provided 9x9 default matrices
+        self.n = 9
         self.n_var.set(self.n)
         self.names = [f'D{i+1}' for i in range(self.n)]
         self.positions, self.grid_rows, self.grid_cols = make_grid_positions(self.n)
+        try:
+            self.rows_var.set(self.grid_rows)
+            self.cols_var.set(self.grid_cols)
+        except Exception:
+            pass
         self.metric = 'manhattan'
         self.metric_var.set(self.metric)
-        # load D from positions unless user intends to use custom distances
-        if not getattr(self, 'use_custom_dist_var', tk.BooleanVar()).get():
-            self.D = compute_distance_matrix(self.positions, self.metric)
 
-        # Example symmetric flow matrix for demo
-        demo = [
-            [0, 10, 5, 2, 0, 8, 1, 0],
-            [10, 0, 3, 0, 2, 0, 0, 6],
-            [5, 3, 0, 7, 0, 0, 0, 0],
-            [2, 0, 7, 0, 4, 0, 0, 0],
-            [0, 2, 0, 4, 0, 9, 0, 0],
-            [8, 0, 0, 0, 9, 0, 11, 0],
-            [1, 0, 0, 0, 0, 11, 0, 1],
-            [0, 6, 0, 0, 0, 0, 1, 0],
+        # Ensure GUI flags: use custom distances and enforce symmetry
+        try:
+            self.use_custom_dist_var.set(True)
+        except Exception:
+            pass
+        try:
+            self.sym_dist_var.set(True)
+        except Exception:
+            pass
+        try:
+            self.sym_var.set(True)
+        except Exception:
+            pass
+
+        # Default flow matrix F (9x9) from specification
+        F_demo = [
+            [0, 1000,    0,    0,    0,    0,    0,    0,    0],
+            [1000,   0, 1000, 1000, 1000,  100,   10,    1,    0],
+            [0, 1000,    0, 1000,    0,    0,    0,    0,    0],
+            [0, 1000, 1000,    0,  100,    0,    0,    0,    0],
+            [0, 1000,    0,  100,    0, 1000,  100,   10,    1],
+            [0,  100,    0,    0, 1000,    0, 1000,  100,   10],
+            [0,   10,    0,    0,  100, 1000,    0, 1000,  100],
+            [0,    1,    0,    0,   10,  100, 1000,    0, 1000],
+            [0,    0,    0,    0,    1,   10,  100, 1000,    0],
         ]
-        self.F = [[float(x) for x in row] for row in demo]
+        # Default distance matrix D (9x9) from specification
+        D_demo = [
+            [0,1,2,3,2,3,2,3,4],
+            [1,0,1,2,1,2,1,2,3],
+            [2,1,0,1,2,3,2,3,4],
+            [3,2,1,0,1,2,3,4,3],
+            [2,1,2,1,0,1,2,3,2],
+            [3,2,3,2,1,0,1,2,1],
+            [2,1,2,3,2,1,0,1,2],
+            [3,2,3,4,3,2,1,0,1],
+            [4,3,4,3,2,1,2,1,0],
+        ]
+
+        # convert to floats
+        self.F = [[float(x) for x in row] for row in F_demo]
+        self.D = [[float(x) for x in row] for row in D_demo]
+
+        # enforce symmetry explicitly for safety
+        for i in range(self.n):
+            for j in range(i+1, self.n):
+                avgF = (self.F[i][j] + self.F[j][i]) / 2.0
+                self.F[i][j] = self.F[j][i] = avgF
+                avgD = (self.D[i][j] + self.D[j][i]) / 2.0
+                self.D[i][j] = self.D[j][i] = avgD
+
+        # initial layout
         self.layout = list(range(self.n))
         self.history = []
         self.history_index = -1
@@ -398,7 +476,12 @@ class PairwiseExchangeApp(tk.Tk):
         # clear
         for child in self.fm_inner.winfo_children():
             child.destroy()
-        self.flow_entries = [[None] * self.n for _ in range(self.n)]
+        # keep both StringVar matrix and widget matrix
+        self.flow_vars = [[None] * self.n for _ in range(self.n)]
+        self.flow_entry_widgets = [[None] * self.n for _ in range(self.n)]
+        # guard to avoid recursive updates when mirroring
+        if not hasattr(self, '_updating_mirror'):
+            self._updating_mirror = False
         # header
         ttk.Label(self.fm_inner, text='').grid(row=0, column=0)
         for j in range(self.n):
@@ -409,7 +492,11 @@ class PairwiseExchangeApp(tk.Tk):
                 v = tk.StringVar(value=str(int(self.F[i][j]) if self.F[i][j].is_integer() else f'{self.F[i][j]:.2f}'))
                 ent = ttk.Entry(self.fm_inner, textvariable=v, width=6)
                 ent.grid(row=1 + i, column=1 + j, padx=1, pady=1)
-                self.flow_entries[i][j] = v
+                self.flow_vars[i][j] = v
+                self.flow_entry_widgets[i][j] = ent
+                # bind events to mirror symmetric cell when editing
+                ent.bind('<FocusOut>', lambda e, a=i, b=j: self.on_flow_cell_changed(a, b))
+                ent.bind('<KeyRelease>', lambda e, a=i, b=j: self.on_flow_cell_changed(a, b))
 
         # save button
         ttk.Button(self.fm_inner, text='Apply Flow Edits', command=self.apply_flow_edits).grid(row=2 + self.n, column=0, columnspan=self.n + 1, pady=6)
@@ -418,7 +505,10 @@ class PairwiseExchangeApp(tk.Tk):
         # clear
         for child in self.dist_inner.winfo_children():
             child.destroy()
-        self.dist_entries = [[None] * self.n for _ in range(self.n)]
+        self.dist_vars = [[None] * self.n for _ in range(self.n)]
+        self.dist_entry_widgets = [[None] * self.n for _ in range(self.n)]
+        if not hasattr(self, '_updating_mirror'):
+            self._updating_mirror = False
         # header
         ttk.Label(self.dist_inner, text='').grid(row=0, column=0)
         for j in range(self.n):
@@ -429,7 +519,10 @@ class PairwiseExchangeApp(tk.Tk):
                 v = tk.StringVar(value=str(int(self.D[i][j]) if float(self.D[i][j]).is_integer() else f'{self.D[i][j]:.2f}'))
                 ent = ttk.Entry(self.dist_inner, textvariable=v, width=6)
                 ent.grid(row=1 + i, column=1 + j, padx=1, pady=1)
-                self.dist_entries[i][j] = v
+                self.dist_vars[i][j] = v
+                self.dist_entry_widgets[i][j] = ent
+                ent.bind('<FocusOut>', lambda e, a=i, b=j: self.on_dist_cell_changed(a, b))
+                ent.bind('<KeyRelease>', lambda e, a=i, b=j: self.on_dist_cell_changed(a, b))
 
         ttk.Button(self.dist_inner, text='Apply Distance Edits', command=self.apply_distance_edits).grid(row=2 + self.n, column=0, columnspan=self.n + 1, pady=6)
 
@@ -439,7 +532,7 @@ class PairwiseExchangeApp(tk.Tk):
         try:
             for i in range(self.n):
                 for j in range(self.n):
-                    s = self.dist_entries[i][j].get().strip()
+                    s = self.dist_vars[i][j].get().strip()
                     if s == '':
                         val = 0.0
                     else:
@@ -463,13 +556,38 @@ class PairwiseExchangeApp(tk.Tk):
         self.update_swap_candidates_text()
         self.status_var.set('Applied distance edits (using custom D)')
 
+    def on_dist_cell_changed(self, i, j):
+        # called when a distance cell is edited; mirror to [j][i] if symmetry requested
+        if self._updating_mirror:
+            return
+        try:
+            s = self.dist_vars[i][j].get().strip()
+            val = 0.0 if s == '' else float(s)
+            if val < 0:
+                return
+        except Exception:
+            return
+        # update internal D
+        self.D[i][j] = val
+        if self.sym_dist_var.get():
+            # mirror
+            try:
+                self._updating_mirror = True
+                self.dist_vars[j][i].set(str(int(val) if float(val).is_integer() else f'{val:.2f}'))
+                self.D[j][i] = val
+            finally:
+                self._updating_mirror = False
+        # mark custom distances in use
+        self.use_custom_dist_var.set(True)
+        self.update_swap_candidates_text()
+
     def apply_flow_edits(self):
         # parse entries; validate
         newF = [[0.0] * self.n for _ in range(self.n)]
         try:
             for i in range(self.n):
                 for j in range(self.n):
-                    s = self.flow_entries[i][j].get().strip()
+                    s = self.flow_vars[i][j].get().strip()
                     if s == '':
                         val = 0.0
                     else:
@@ -491,6 +609,47 @@ class PairwiseExchangeApp(tk.Tk):
         self.F = newF
         self.update_swap_candidates_text()
         self.status_var.set('Applied flow edits')
+
+    def on_flow_cell_changed(self, i, j):
+        # called when a flow cell is edited; mirror to [j][i] if symmetry requested
+        if self._updating_mirror:
+            return
+        try:
+            s = self.flow_vars[i][j].get().strip()
+            val = 0.0 if s == '' else float(s)
+            if val < 0:
+                return
+        except Exception:
+            return
+        # update internal F
+        self.F[i][j] = val
+        if self.sym_var.get():
+            try:
+                self._updating_mirror = True
+                self.flow_vars[j][i].set(str(int(val) if float(val).is_integer() else f'{val:.2f}'))
+                self.F[j][i] = val
+            finally:
+                self._updating_mirror = False
+        self.update_swap_candidates_text()
+
+    def on_rows_cols_change(self):
+        # applied when user changes rows/cols spinboxes; validate and rebuild positions
+        try:
+            r = int(self.rows_var.get())
+            c = int(self.cols_var.get())
+        except Exception:
+            return
+        if r <= 0 or c <= 0:
+            messagebox.showerror('Invalid grid', 'Rows and Cols must be positive')
+            return
+        if r * c < self.n:
+            messagebox.showerror('Invalid grid', 'Rows*Cols must be >= n')
+            return
+        self.positions, self.grid_rows, self.grid_cols = make_grid_positions(self.n, rows=r, cols=c)
+        # recompute D if not custom
+        if not getattr(self, 'use_custom_dist_var', tk.BooleanVar()).get():
+            self.D = compute_distance_matrix(self.positions, self.metric)
+        self.refresh_all()
 
     def build_layout_editor(self):
         for child in self.layout_editor_container.winfo_children():
