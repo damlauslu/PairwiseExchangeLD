@@ -29,6 +29,7 @@ from tkinter import ttk, filedialog, messagebox
 import math
 import random
 import csv
+import json
 
 # ---------- Utility functions ----------
 
@@ -198,7 +199,7 @@ class PairwiseExchangeApp(tk.Tk):
         self._add_info_button(
             size_frame,
             "Problem setup: n, grid size, distance metric, and symmetry options.\n"
-            "Rows×Cols must be >= n."
+            "Rows*Cols must be >= n. Metric affects distances when Custom Distance is OFF."
         )
         ttk.Label(size_frame, text='n (3..12):', style='Problem.TLabel').grid(row=0, column=0, sticky='w')
         self.n_var = tk.IntVar(value=self.n)
@@ -253,8 +254,8 @@ class PairwiseExchangeApp(tk.Tk):
         gen_frame.grid(row=1, column=0, sticky='nsew', pady=4)
         self._add_info_button(
             gen_frame,
-            "Randomize flow and (optionally) distance matrices.\n"
-            "Use seeds for repeatable results."
+            "Randomize Flow and (optionally) Distance matrices.\n"
+            "Uses current Rows/Cols if valid. Seeds make results repeatable."
         )
         gen_frame.columnconfigure(0, weight=1)
 
@@ -296,8 +297,8 @@ class PairwiseExchangeApp(tk.Tk):
         algo_frame.grid(row=2, column=0, sticky='nsew', pady=4)
         self._add_info_button(
             algo_frame,
-            "Step-by-step or run-to-end optimization.\n"
-            "Previous/Reset undo swaps."
+            "Algorithm controls: run, step, undo, reset.\n"
+            "Show swaps list and Top-K options are below."
         )
         ttk.Button(algo_frame, text='Run to End', command=self.run_to_end, style='Algo.TButton').grid(row=0, column=0, sticky='ew')
         ttk.Button(algo_frame, text='Next Step', command=self.next_step, style='Algo.TButton').grid(row=0, column=1, sticky='ew')
@@ -316,11 +317,13 @@ class PairwiseExchangeApp(tk.Tk):
         log_frame.grid(row=3, column=0, sticky='nsew', pady=4)
         self._add_info_button(
             log_frame,
-            "Export history and validate ΔC accuracy."
+            "Export history (CSV/TXT), save/load project state, and validate ΔC accuracy."
         )
         ttk.Button(log_frame, text='Export CSV', command=self.export_csv, style='Log.TButton').grid(row=0, column=0, sticky='ew')
         ttk.Button(log_frame, text='Export TXT', command=self.export_txt, style='Log.TButton').grid(row=0, column=1, sticky='ew')
-        ttk.Button(log_frame, text='Validate ΔC for current best', command=self.validate_current_delta, style='Log.TButton').grid(row=1, column=0, columnspan=2, pady=4)
+        ttk.Button(log_frame, text='Save Project', command=self.save_project, style='Log.TButton').grid(row=1, column=0, sticky='ew', pady=(2, 0))
+        ttk.Button(log_frame, text='Load Project', command=self.load_project, style='Log.TButton').grid(row=1, column=1, sticky='ew', pady=(2, 0))
+        ttk.Button(log_frame, text='Validate ΔC for current best', command=self.validate_current_delta, style='Log.TButton').grid(row=2, column=0, columnspan=2, pady=(2, 4))
 
         quick_help_btn = ttk.Button(
             control_frame,
@@ -399,11 +402,6 @@ class PairwiseExchangeApp(tk.Tk):
         # Flow matrix editor
         self.fm_frame = ttk.LabelFrame(bottom_pane, text='Flow Matrix (editable)', padding=6)
         bottom_pane.add(self.fm_frame, weight=1)
-        self._add_info_button(
-            self.fm_frame,
-            "Flow matrix F[i][j].\n"
-            "Edit values and click Apply Flow Edits."
-        )
         fm_container = ttk.Frame(self.fm_frame)
         fm_container.pack(fill='both', expand=True)
         fm_container.columnconfigure(0, weight=1)
@@ -427,11 +425,6 @@ class PairwiseExchangeApp(tk.Tk):
         # Distance matrix editor
         self.dist_frame = ttk.LabelFrame(bottom_pane, text='Distance Matrix (editable)', padding=6)
         bottom_pane.add(self.dist_frame, weight=1)
-        self._add_info_button(
-            self.dist_frame,
-            "Distance matrix D[p][q].\n"
-            "Editable only when Custom Distance is ON."
-        )
         dist_container = ttk.Frame(self.dist_frame)
         dist_container.pack(fill='both', expand=True)
         dist_container.columnconfigure(0, weight=1)
@@ -633,7 +626,7 @@ class PairwiseExchangeApp(tk.Tk):
             ttk.Label(self.fm_inner, text=self.names[i]).grid(row=1 + i, column=0, padx=2)
             for j in range(self.n):
                 v = tk.StringVar(value=str(int(self.F[i][j]) if self.F[i][j].is_integer() else f'{self.F[i][j]:.2f}'))
-                ent = ttk.Entry(self.fm_inner, textvariable=v, width=self._matrix_entry_width())
+                ent = tk.Entry(self.fm_inner, textvariable=v, width=self._matrix_entry_width())
                 ent.grid(row=1 + i, column=1 + j, padx=1, pady=1)
                 self.flow_vars[i][j] = v
                 self.flow_entry_widgets[i][j] = ent
@@ -669,10 +662,10 @@ class PairwiseExchangeApp(tk.Tk):
             for j in range(self.n):
                 val = matrix[i][j]
                 v = tk.StringVar(value=str(int(val) if float(val).is_integer() else f'{val:.2f}'))
-                ent = ttk.Entry(self.dist_inner, textvariable=v, width=self._matrix_entry_width())
+                ent = tk.Entry(self.dist_inner, textvariable=v, width=self._matrix_entry_width())
                 ent.grid(row=1 + i, column=1 + j, padx=1, pady=1)
                 if not use_custom:
-                    ent.configure(state='disabled')
+                    ent.configure(state='disabled', disabledbackground='#f0f0f0')
                 self.dist_vars[i][j] = v
                 self.dist_entry_widgets[i][j] = ent
                 if use_custom:
@@ -1061,17 +1054,95 @@ class PairwiseExchangeApp(tk.Tk):
         else:
             self.swap_text.insert('end', '\nNo improving swap exists (local optimum)\n')
 
+    def save_project(self):
+        f = filedialog.asksaveasfilename(defaultextension='.json', filetypes=[('JSON files','*.json')])
+        if not f:
+            return
+        data = {
+            'n': self.n,
+            'rows': self.grid_rows,
+            'cols': self.grid_cols,
+            'metric': self.metric_var.get(),
+            'force_symmetric': self.sym_var.get(),
+            'use_custom_distance': self.use_custom_dist_var.get(),
+            'force_symmetric_dist': self.sym_dist_var.get(),
+            'max_iterations': int(self.max_iter_var.get()),
+            'show_all': self.show_all_var.get(),
+            'top_k': int(self.topk_var.get()),
+            'random': {
+                'min_flow': int(self.min_flow_var.get()),
+                'max_flow': int(self.max_flow_var.get()),
+                'sparsity': float(self.sparsity_var.get()),
+                'seed': self.seed_var.get(),
+                'min_dist': int(self.min_dist_var.get()),
+                'max_dist': int(self.max_dist_var.get()),
+                'dist_sparsity': float(self.dist_sparsity_var.get()),
+                'dist_seed': self.dist_seed_var.get(),
+            },
+            'F': self.F,
+            'D': self.D,
+            'layout': self.layout,
+            'history': self.history,
+        }
+        with open(f, 'w', encoding='utf-8') as fh:
+            json.dump(data, fh, indent=2)
+        self.status_var.set(f'Saved project to {f}')
+
+    def load_project(self):
+        f = filedialog.askopenfilename(filetypes=[('JSON files','*.json')])
+        if not f:
+            return
+        with open(f, 'r', encoding='utf-8') as fh:
+            data = json.load(fh)
+        self.n = int(data.get('n', self.n))
+        self.names = [f'D{i+1}' for i in range(self.n)]
+        self.grid_rows = int(data.get('rows', self.grid_rows))
+        self.grid_cols = int(data.get('cols', self.grid_cols))
+        self.positions, self.grid_rows, self.grid_cols = make_grid_positions(self.n, rows=self.grid_rows, cols=self.grid_cols)
+        self.metric_var.set(data.get('metric', self.metric))
+        self.sym_var.set(bool(data.get('force_symmetric', self.sym_var.get())))
+        self.use_custom_dist_var.set(bool(data.get('use_custom_distance', self.use_custom_dist_var.get())))
+        self.sym_dist_var.set(bool(data.get('force_symmetric_dist', self.sym_dist_var.get())))
+        self.max_iter_var.set(int(data.get('max_iterations', self.max_iterations)))
+        self.show_all_var.set(bool(data.get('show_all', True)))
+        self.topk_var.set(int(data.get('top_k', 10)))
+        rnd = data.get('random', {})
+        self.min_flow_var.set(int(rnd.get('min_flow', self.min_flow_var.get())))
+        self.max_flow_var.set(int(rnd.get('max_flow', self.max_flow_var.get())))
+        self.sparsity_var.set(float(rnd.get('sparsity', self.sparsity_var.get())))
+        self.seed_var.set(rnd.get('seed', self.seed_var.get()))
+        self.min_dist_var.set(int(rnd.get('min_dist', self.min_dist_var.get())))
+        self.max_dist_var.set(int(rnd.get('max_dist', self.max_dist_var.get())))
+        self.dist_sparsity_var.set(float(rnd.get('dist_sparsity', self.dist_sparsity_var.get())))
+        self.dist_seed_var.set(rnd.get('dist_seed', self.dist_seed_var.get()))
+        self.F = data.get('F', self.F)
+        self.layout = data.get('layout', self.layout)
+        if self.use_custom_dist_var.get():
+            self.D = data.get('D', self.D)
+        else:
+            self.D = compute_distance_matrix(self.positions, self.metric_var.get())
+        self.history = data.get('history', [])
+        self.history_index = len(self.history) - 1 if self.history else -1
+        self.n_var.set(self.n)
+        self.rows_var.set(self.grid_rows)
+        self.cols_var.set(self.grid_cols)
+        self._last_valid_rows = self.grid_rows
+        self._last_valid_cols = self.grid_cols
+        self.refresh_all()
+        self.status_var.set(f'Loaded project from {f}')
+
     def show_quick_help(self):
         msg = (
             "Quick Guide\n"
             "1) Set n and (optional) Rows/Cols\n"
             "2) Use Random Generator OR enter your own values in matrices\n"
-            "3) Apply Flow/Distance Edits after manual changes\n"
-            "4) Drag to swap departments or use Next Step\n"
-            "5) Run to End to finish\n"
+            "3) Random generation uses your current Rows/Cols if valid\n"
+            "4) Apply Flow/Distance Edits after manual changes\n"
+            "5) Drag to swap departments or use Next Step\n"
+            "6) Run to End to finish\n"
             "Notes:\n"
-            "- Rows×Cols must be >= n\n"
-            "- Custom Distance ON enables distance editing otherwise it depends on the current layout\n"
+            "- Rows*Cols must be >= n\n"
+            "- Custom Distance ON enables distance editing\n"
         )
         messagebox.showinfo('Quick Guide', msg)
 
