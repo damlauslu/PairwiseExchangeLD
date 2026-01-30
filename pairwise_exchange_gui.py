@@ -148,6 +148,14 @@ class PairwiseExchangeApp(tk.Tk):
         # Running flag and after() id
         self.running = False
         self.run_after_id = None
+        # Drag-and-drop state for swapping departments
+        self.drag_active = False
+        self.drag_dept = None
+        self.drag_start_pos = None
+        self.drag_over_pos = None
+        # Temporary highlight after swaps
+        self.highlight_positions = set()
+        self.highlight_after_id = None
 
         # Build UI
         self.create_widgets()
@@ -157,13 +165,41 @@ class PairwiseExchangeApp(tk.Tk):
 
     # ---------- UI building ----------
     def create_widgets(self):
-        control_frame = ttk.Frame(self)
-        control_frame.pack(side='left', fill='y', padx=6, pady=6)
+        main_pane = ttk.Panedwindow(self, orient='horizontal')
+        main_pane.pack(fill='both', expand=True, padx=6, pady=6)
+
+        control_frame = ttk.Frame(main_pane, padding=6)
+        main_pane.add(control_frame, weight=1)
+        control_frame.columnconfigure(0, weight=1)
+
+        style = ttk.Style(self)
+        style.configure('Problem.TLabelframe', background='#f3f7ff')
+        style.configure('Problem.TLabelframe.Label', background='#f3f7ff')
+        style.configure('Problem.TLabel', background='#f3f7ff')
+        style.configure('Problem.TCheckbutton', background='#f3f7ff')
+        style.configure('Problem.TButton', background='#dde7ff')
+        style.configure('Random.TLabelframe', background='#f7f3ff')
+        style.configure('Random.TLabelframe.Label', background='#f7f3ff')
+        style.configure('Random.TLabel', background='#f7f3ff')
+        style.configure('Random.TButton', background='#e7ddff')
+        style.configure('Algo.TLabelframe', background='#f3fff7')
+        style.configure('Algo.TLabelframe.Label', background='#f3fff7')
+        style.configure('Algo.TButton', background='#ddffe7')
+        style.configure('Log.TLabelframe', background='#fff7f3')
+        style.configure('Log.TLabelframe.Label', background='#fff7f3')
+        style.configure('Log.TButton', background='#ffe7dd')
+        style.configure('MatrixApply.TButton', background='#dcecff')
+        style.configure('Quick.TButton', background='#f2f2f2', font=('Arial', 8))
 
         # Problem size
-        size_frame = ttk.LabelFrame(control_frame, text='Problem')
-        size_frame.pack(fill='x', pady=4)
-        ttk.Label(size_frame, text='n (3..12):').grid(row=0, column=0, sticky='w')
+        size_frame = ttk.LabelFrame(control_frame, text='Problem', style='Problem.TLabelframe', padding=6)
+        size_frame.grid(row=0, column=0, sticky='nsew', pady=4)
+        self._add_info_button(
+            size_frame,
+            "Problem setup: n, grid size, distance metric, and symmetry options.\n"
+            "Rows×Cols must be >= n."
+        )
+        ttk.Label(size_frame, text='n (3..12):', style='Problem.TLabel').grid(row=0, column=0, sticky='w')
         self.n_var = tk.IntVar(value=self.n)
         n_spin = ttk.Spinbox(size_frame, from_=3, to=12, textvariable=self.n_var, width=5,
                              command=self.on_n_change)
@@ -171,18 +207,18 @@ class PairwiseExchangeApp(tk.Tk):
         n_spin.bind('<FocusOut>', lambda e: self.on_n_change())
         n_spin.bind('<Return>', lambda e: self.on_n_change())
 
-        ttk.Label(size_frame, text='Rows:').grid(row=0, column=2, sticky='w')
+        ttk.Label(size_frame, text='Rows:', style='Problem.TLabel').grid(row=0, column=2, sticky='w')
         self.rows_var = tk.IntVar(value=self.grid_rows)
         rows_spin = ttk.Spinbox(size_frame, from_=1, to=12, textvariable=self.rows_var, width=5,
                     command=self.on_rows_cols_change)
         rows_spin.grid(row=0, column=3, sticky='w')
-        ttk.Label(size_frame, text='Cols:').grid(row=1, column=2, sticky='w')
+        ttk.Label(size_frame, text='Cols:', style='Problem.TLabel').grid(row=1, column=2, sticky='w')
         self.cols_var = tk.IntVar(value=self.grid_cols)
         cols_spin = ttk.Spinbox(size_frame, from_=1, to=12, textvariable=self.cols_var, width=5,
                     command=self.on_rows_cols_change)
         cols_spin.grid(row=1, column=3, sticky='w')
 
-        ttk.Label(size_frame, text='Metric:').grid(row=1, column=0, sticky='w')
+        ttk.Label(size_frame, text='Metric:', style='Problem.TLabel').grid(row=1, column=0, sticky='w')
         self.metric_var = tk.StringVar(value=self.metric)
         metric_combo = ttk.Combobox(size_frame, textvariable=self.metric_var,
                                     values=['manhattan', 'euclidean'], state='readonly', width=10)
@@ -190,9 +226,9 @@ class PairwiseExchangeApp(tk.Tk):
         metric_combo.bind('<<ComboboxSelected>>', lambda e: self.update_distance())
 
         self.sym_var = tk.BooleanVar(value=self.force_symmetric)
-        ttk.Checkbutton(size_frame, text='Force symmetric flows', variable=self.sym_var).grid(row=2, column=0, columnspan=2, sticky='w')
+        ttk.Checkbutton(size_frame, text='Force symmetric flows', variable=self.sym_var, style='Problem.TCheckbutton').grid(row=2, column=0, columnspan=2, sticky='w')
 
-        ttk.Label(size_frame, text='Max iterations:').grid(row=3, column=0, sticky='w')
+        ttk.Label(size_frame, text='Max iterations:', style='Problem.TLabel').grid(row=3, column=0, sticky='w')
         self.max_iter_var = tk.IntVar(value=self.max_iterations)
         ttk.Entry(size_frame, textvariable=self.max_iter_var, width=8).grid(row=3, column=1, sticky='w')
         # Custom distance matrix option
@@ -201,40 +237,71 @@ class PairwiseExchangeApp(tk.Tk):
             size_frame,
             text='Use custom distance matrix',
             variable=self.use_custom_dist_var,
-            command=self.on_use_custom_distance_toggle
+            command=self.on_use_custom_distance_toggle,
+            style='Problem.TCheckbutton'
         ).grid(row=4, column=0, columnspan=2, sticky='w')
         self.sym_dist_var = tk.BooleanVar(value=True)
-        ttk.Checkbutton(size_frame, text='Force symmetric distances', variable=self.sym_dist_var).grid(row=5, column=0, columnspan=2, sticky='w')
+        ttk.Checkbutton(size_frame, text='Force symmetric distances', variable=self.sym_dist_var, style='Problem.TCheckbutton').grid(row=5, column=0, columnspan=2, sticky='w')
         # track last valid grid to prevent invalid downsizing
         self._last_valid_rows = self.grid_rows
         self._last_valid_cols = self.grid_cols
         self._rows_cols_guard = False
 
         # Random generator
-        gen_frame = ttk.LabelFrame(control_frame, text='Random Generator')
-        gen_frame.pack(fill='x', pady=4)
-        ttk.Label(gen_frame, text='Min flow:').grid(row=0, column=0, sticky='w')
-        self.min_flow_var = tk.IntVar(value=0)
-        ttk.Entry(gen_frame, textvariable=self.min_flow_var, width=6).grid(row=0, column=1)
-        ttk.Label(gen_frame, text='Max flow:').grid(row=0, column=2, sticky='w')
-        self.max_flow_var = tk.IntVar(value=20)
-        ttk.Entry(gen_frame, textvariable=self.max_flow_var, width=6).grid(row=0, column=3)
-        ttk.Label(gen_frame, text='Sparsity (0..1):').grid(row=1, column=0, sticky='w')
-        self.sparsity_var = tk.DoubleVar(value=0.2)
-        ttk.Entry(gen_frame, textvariable=self.sparsity_var, width=6).grid(row=1, column=1)
-        ttk.Label(gen_frame, text='Seed (opt):').grid(row=1, column=2, sticky='w')
-        self.seed_var = tk.StringVar(value='')
-        ttk.Entry(gen_frame, textvariable=self.seed_var, width=8).grid(row=1, column=3)
+        gen_frame = ttk.LabelFrame(control_frame, text='Random Generator', style='Random.TLabelframe', padding=6)
+        gen_frame.grid(row=1, column=0, sticky='nsew', pady=4)
+        self._add_info_button(
+            gen_frame,
+            "Randomize flow and (optionally) distance matrices.\n"
+            "Use seeds for repeatable results."
+        )
+        gen_frame.columnconfigure(0, weight=1)
 
-        ttk.Button(gen_frame, text='Generate Random Problem', command=self.generate_random_problem).grid(row=2, column=0, columnspan=4, pady=4)
+        flow_frame = ttk.LabelFrame(gen_frame, text='Flow', style='Random.TLabelframe')
+        flow_frame.grid(row=0, column=0, sticky='nsew', padx=4, pady=4)
+        dist_frame = ttk.LabelFrame(gen_frame, text='Distance', style='Random.TLabelframe')
+        dist_frame.grid(row=1, column=0, sticky='nsew', padx=4, pady=4)
+
+        ttk.Label(flow_frame, text='Min:', style='Random.TLabel').grid(row=0, column=0, sticky='w')
+        self.min_flow_var = tk.IntVar(value=0)
+        ttk.Entry(flow_frame, textvariable=self.min_flow_var, width=6).grid(row=0, column=1, sticky='w')
+        ttk.Label(flow_frame, text='Max:', style='Random.TLabel').grid(row=0, column=2, sticky='w')
+        self.max_flow_var = tk.IntVar(value=20)
+        ttk.Entry(flow_frame, textvariable=self.max_flow_var, width=6).grid(row=0, column=3, sticky='w')
+        ttk.Label(flow_frame, text='Sparsity (0..1):', style='Random.TLabel').grid(row=1, column=0, sticky='w')
+        self.sparsity_var = tk.DoubleVar(value=0.2)
+        ttk.Entry(flow_frame, textvariable=self.sparsity_var, width=6).grid(row=1, column=1, sticky='w')
+        ttk.Label(flow_frame, text='Seed (opt):', style='Random.TLabel').grid(row=1, column=2, sticky='w')
+        self.seed_var = tk.StringVar(value='')
+        ttk.Entry(flow_frame, textvariable=self.seed_var, width=8).grid(row=1, column=3, sticky='w')
+
+        ttk.Label(dist_frame, text='Min:', style='Random.TLabel').grid(row=0, column=0, sticky='w')
+        self.min_dist_var = tk.IntVar(value=1)
+        ttk.Entry(dist_frame, textvariable=self.min_dist_var, width=6).grid(row=0, column=1, sticky='w')
+        ttk.Label(dist_frame, text='Max:', style='Random.TLabel').grid(row=0, column=2, sticky='w')
+        self.max_dist_var = tk.IntVar(value=20)
+        ttk.Entry(dist_frame, textvariable=self.max_dist_var, width=6).grid(row=0, column=3, sticky='w')
+        ttk.Label(dist_frame, text='Sparsity (0..1):', style='Random.TLabel').grid(row=1, column=0, sticky='w')
+        self.dist_sparsity_var = tk.DoubleVar(value=0.0)
+        ttk.Entry(dist_frame, textvariable=self.dist_sparsity_var, width=6).grid(row=1, column=1, sticky='w')
+        ttk.Label(dist_frame, text='Seed (opt):', style='Random.TLabel').grid(row=1, column=2, sticky='w')
+        self.dist_seed_var = tk.StringVar(value='')
+        ttk.Entry(dist_frame, textvariable=self.dist_seed_var, width=8).grid(row=1, column=3, sticky='w')
+
+        ttk.Button(gen_frame, text='Generate Random Problem', command=self.generate_random_problem, style='Random.TButton').grid(row=2, column=0, pady=4)
 
         # Controls for algorithm
-        algo_frame = ttk.LabelFrame(control_frame, text='Algorithm Controls')
-        algo_frame.pack(fill='x', pady=4)
-        ttk.Button(algo_frame, text='Run to End', command=self.run_to_end).grid(row=0, column=0, sticky='ew')
-        ttk.Button(algo_frame, text='Next Step', command=self.next_step).grid(row=0, column=1, sticky='ew')
-        ttk.Button(algo_frame, text='Previous Step', command=self.prev_step).grid(row=0, column=2, sticky='ew')
-        ttk.Button(algo_frame, text='Reset to Initial', command=self.reset_to_initial).grid(row=1, column=0, columnspan=3, sticky='ew')
+        algo_frame = ttk.LabelFrame(control_frame, text='Algorithm Controls', style='Algo.TLabelframe', padding=6)
+        algo_frame.grid(row=2, column=0, sticky='nsew', pady=4)
+        self._add_info_button(
+            algo_frame,
+            "Step-by-step or run-to-end optimization.\n"
+            "Previous/Reset undo swaps."
+        )
+        ttk.Button(algo_frame, text='Run to End', command=self.run_to_end, style='Algo.TButton').grid(row=0, column=0, sticky='ew')
+        ttk.Button(algo_frame, text='Next Step', command=self.next_step, style='Algo.TButton').grid(row=0, column=1, sticky='ew')
+        ttk.Button(algo_frame, text='Previous Step', command=self.prev_step, style='Algo.TButton').grid(row=0, column=2, sticky='ew')
+        ttk.Button(algo_frame, text='Reset to Initial', command=self.reset_to_initial, style='Algo.TButton').grid(row=1, column=0, columnspan=3, sticky='ew')
 
         ttk.Label(algo_frame, text='Show swaps:').grid(row=2, column=0, sticky='w')
         self.show_all_var = tk.BooleanVar(value=True)
@@ -244,29 +311,33 @@ class PairwiseExchangeApp(tk.Tk):
         ttk.Entry(algo_frame, textvariable=self.topk_var, width=6).grid(row=3, column=1, sticky='w')
 
         # Export and log
-        # Layout editor (manual position editing)
-        layout_frame = ttk.LabelFrame(control_frame, text='Layout Editor')
-        layout_frame.pack(fill='x', pady=4)
-        self.layout_vars = []
-        ttk.Label(layout_frame, text='Map each department to a grid position (P#).').pack(anchor='w')
-        self.layout_editor_container = ttk.Frame(layout_frame)
-        self.layout_editor_container.pack(anchor='w')
-        self.layout_tip_label = ttk.Label(
-            layout_frame,
-            text='Tip: P# is the position index. Empty cells show P#. Filled cells show P# under the dept.',
-            foreground='#666666'
+        log_frame = ttk.LabelFrame(control_frame, text='Logging / Export', style='Log.TLabelframe', padding=6)
+        log_frame.grid(row=3, column=0, sticky='nsew', pady=4)
+        self._add_info_button(
+            log_frame,
+            "Export history and validate ΔC accuracy."
         )
-        self.layout_tip_label.pack(anchor='w', pady=(2, 0))
+        ttk.Button(log_frame, text='Export CSV', command=self.export_csv, style='Log.TButton').grid(row=0, column=0, sticky='ew')
+        ttk.Button(log_frame, text='Export TXT', command=self.export_txt, style='Log.TButton').grid(row=0, column=1, sticky='ew')
+        ttk.Button(log_frame, text='Validate ΔC for current best', command=self.validate_current_delta, style='Log.TButton').grid(row=1, column=0, columnspan=2, pady=4)
 
-        log_frame = ttk.LabelFrame(control_frame, text='Logging / Export')
-        log_frame.pack(fill='x', pady=4)
-        ttk.Button(log_frame, text='Export CSV', command=self.export_csv).grid(row=0, column=0, sticky='ew')
-        ttk.Button(log_frame, text='Export TXT', command=self.export_txt).grid(row=0, column=1, sticky='ew')
-        ttk.Button(log_frame, text='Validate ΔC for current best', command=self.validate_current_delta).grid(row=1, column=0, columnspan=2, pady=4)
+        quick_help_btn = ttk.Button(
+            control_frame,
+            text='Quick Guide',
+            command=self.show_quick_help,
+            style='Quick.TButton'
+        )
+        quick_help_btn.grid(row=4, column=0, sticky='w', pady=(4, 2))
+
+        control_frame.rowconfigure(0, weight=2)
+        control_frame.rowconfigure(1, weight=3)
+        control_frame.rowconfigure(2, weight=2)
+        control_frame.rowconfigure(3, weight=1)
+        control_frame.rowconfigure(4, weight=0)
 
         # Right area: visualization, tables, and swap panel
-        right_frame = ttk.Frame(self)
-        right_frame.pack(side='right', fill='both', expand=True, padx=6, pady=6)
+        right_frame = ttk.Frame(main_pane, padding=6)
+        main_pane.add(right_frame, weight=4)
 
         # Right column: swap candidates span top-to-bottom
         swap_frame = ttk.LabelFrame(right_frame, text='Swap Candidates & Explanation')
@@ -279,43 +350,96 @@ class PairwiseExchangeApp(tk.Tk):
         content_frame.pack(side='left', fill='both', expand=True)
 
         # Top: layout visualization
-        viz_frame = ttk.LabelFrame(content_frame, text='Layout Visualization')
+        viz_frame = ttk.LabelFrame(content_frame, text='Layout Visualization', padding=6)
         viz_frame.pack(fill='both', expand=True)
+        self._add_info_button(
+            viz_frame,
+            "Drag departments to swap positions.\n"
+            "P# labels show grid positions."
+        )
         self.canvas = tk.Canvas(viz_frame, width=640, height=480, bg='white')
         self.canvas.pack(fill='both', expand=True)
+        self.canvas.bind('<ButtonPress-1>', self.on_canvas_press)
+        self.canvas.bind('<B1-Motion>', self.on_canvas_drag)
+        self.canvas.bind('<ButtonRelease-1>', self.on_canvas_release)
 
         # bottom: tables and detailed info
-        bottom_frame = ttk.Frame(content_frame)
-        bottom_frame.pack(fill='x')
+        matrix_toolbar = ttk.Frame(content_frame)
+        matrix_toolbar.pack(fill='x', pady=(2, 2))
+        matrix_toolbar.columnconfigure(0, weight=1, uniform='mat')
+        matrix_toolbar.columnconfigure(1, weight=1, uniform='mat')
+        flow_toolbar = ttk.Frame(matrix_toolbar)
+        dist_toolbar = ttk.Frame(matrix_toolbar)
+        flow_toolbar.grid(row=0, column=0, sticky='nsew')
+        dist_toolbar.grid(row=0, column=1, sticky='nsew')
+        self.apply_flow_btn = ttk.Button(
+            flow_toolbar,
+            text='Apply Flow Edits',
+            command=self.apply_flow_edits,
+            style='MatrixApply.TButton'
+        )
+        self.apply_flow_btn.pack(pady=2)
+        self.apply_dist_btn = ttk.Button(
+            dist_toolbar,
+            text='Apply Distance Edits',
+            command=self.apply_distance_edits,
+            style='MatrixApply.TButton'
+        )
+        self.apply_dist_btn.pack(pady=2)
+
+        bottom_pane = ttk.Panedwindow(content_frame, orient='horizontal')
+        bottom_pane.pack(fill='both', expand=True)
 
         # Flow matrix editor
-        fm_frame = ttk.LabelFrame(bottom_frame, text='Flow Matrix (editable)')
-        fm_frame.pack(side='right', fill='both', expand=True, padx=4)
-        self.fm_canvas = tk.Canvas(fm_frame)
-        self.fm_canvas.pack(side='left', fill='both', expand=True)
+        self.fm_frame = ttk.LabelFrame(bottom_pane, text='Flow Matrix (editable)', padding=6)
+        bottom_pane.add(self.fm_frame, weight=1)
+        self._add_info_button(
+            self.fm_frame,
+            "Flow matrix F[i][j].\n"
+            "Edit values and click Apply Flow Edits."
+        )
+        fm_container = ttk.Frame(self.fm_frame)
+        fm_container.pack(fill='both', expand=True)
+        fm_container.columnconfigure(0, weight=1)
+        fm_container.rowconfigure(0, weight=1)
+
+        self.fm_canvas = tk.Canvas(fm_container)
+        self.fm_canvas.grid(row=0, column=0, sticky='nsew')
+        self.fm_canvas.configure(highlightthickness=1, highlightbackground='#c7d2e8')
         self.fm_inner = ttk.Frame(self.fm_canvas)
         # vertical + horizontal scrollbars for responsiveness
-        self.fm_scroll = ttk.Scrollbar(fm_frame, orient='vertical', command=self.fm_canvas.yview)
-        self.fm_hscroll = ttk.Scrollbar(fm_frame, orient='horizontal', command=self.fm_canvas.xview)
+        self.fm_scroll = ttk.Scrollbar(fm_container, orient='vertical', command=self.fm_canvas.yview)
+        self.fm_hscroll = ttk.Scrollbar(fm_container, orient='horizontal', command=self.fm_canvas.xview)
         self.fm_canvas.configure(yscrollcommand=self.fm_scroll.set, xscrollcommand=self.fm_hscroll.set)
-        self.fm_scroll.pack(side='right', fill='y')
-        self.fm_hscroll.pack(side='bottom', fill='x')
+        self.fm_scroll.grid(row=0, column=1, sticky='ns')
+        self.fm_hscroll.grid(row=1, column=0, sticky='ew')
         self.fm_window = self.fm_canvas.create_window((0,0), window=self.fm_inner, anchor='nw')
         # keep inner sized to canvas width and update scrollregion
         self.fm_inner.bind('<Configure>', lambda e: self.fm_canvas.configure(scrollregion=self.fm_canvas.bbox('all')))
         # do not force inner width to canvas width — allow horizontal scrolling
 
         # Distance matrix editor
-        dist_frame = ttk.LabelFrame(bottom_frame, text='Distance Matrix (editable)')
-        dist_frame.pack(side='left', fill='both', expand=True, padx=4)
-        self.dist_canvas = tk.Canvas(dist_frame)
-        self.dist_canvas.pack(side='left', fill='both', expand=True)
+        self.dist_frame = ttk.LabelFrame(bottom_pane, text='Distance Matrix (editable)', padding=6)
+        bottom_pane.add(self.dist_frame, weight=1)
+        self._add_info_button(
+            self.dist_frame,
+            "Distance matrix D[p][q].\n"
+            "Editable only when Custom Distance is ON."
+        )
+        dist_container = ttk.Frame(self.dist_frame)
+        dist_container.pack(fill='both', expand=True)
+        dist_container.columnconfigure(0, weight=1)
+        dist_container.rowconfigure(0, weight=1)
+
+        self.dist_canvas = tk.Canvas(dist_container)
+        self.dist_canvas.grid(row=0, column=0, sticky='nsew')
+        self.dist_canvas.configure(highlightthickness=1, highlightbackground='#c7d2e8')
         self.dist_inner = ttk.Frame(self.dist_canvas)
-        self.dist_scroll = ttk.Scrollbar(dist_frame, orient='vertical', command=self.dist_canvas.yview)
-        self.dist_hscroll = ttk.Scrollbar(dist_frame, orient='horizontal', command=self.dist_canvas.xview)
+        self.dist_scroll = ttk.Scrollbar(dist_container, orient='vertical', command=self.dist_canvas.yview)
+        self.dist_hscroll = ttk.Scrollbar(dist_container, orient='horizontal', command=self.dist_canvas.xview)
         self.dist_canvas.configure(yscrollcommand=self.dist_scroll.set, xscrollcommand=self.dist_hscroll.set)
-        self.dist_scroll.pack(side='right', fill='y')
-        self.dist_hscroll.pack(side='bottom', fill='x')
+        self.dist_scroll.grid(row=0, column=1, sticky='ns')
+        self.dist_hscroll.grid(row=1, column=0, sticky='ew')
         self.dist_window = self.dist_canvas.create_window((0,0), window=self.dist_inner, anchor='nw')
         self.dist_inner.bind('<Configure>', lambda e: self.dist_canvas.configure(scrollregion=self.dist_canvas.bbox('all')))
         # do not force inner width to canvas width — allow horizontal scrolling
@@ -358,18 +482,35 @@ class PairwiseExchangeApp(tk.Tk):
         # Only recompute from positions when not using custom distance matrix
         if not getattr(self, 'use_custom_dist_var', tk.BooleanVar()).get():
             self.D = compute_distance_matrix(self.positions, self.metric)
+            self.build_distance_editor()
         self.refresh_canvas()
 
     def on_use_custom_distance_toggle(self):
         if self.use_custom_dist_var.get():
+            self.build_distance_editor()
+            if hasattr(self, 'apply_dist_btn'):
+                self.apply_dist_btn.configure(state='normal')
             self.status_var.set('Using custom distance matrix')
             return
         self.metric = self.metric_var.get()
         self.D = compute_distance_matrix(self.positions, self.metric)
         self.build_distance_editor()
+        if hasattr(self, 'apply_dist_btn'):
+            self.apply_dist_btn.configure(state='disabled')
         self.update_swap_candidates_text()
         self.refresh_canvas()
         self.status_var.set('Using computed distance matrix')
+
+    def _refresh_distance_if_computed(self):
+        if self.use_custom_dist_var.get():
+            if hasattr(self, 'apply_dist_btn'):
+                self.apply_dist_btn.configure(state='normal')
+            return
+        self.metric = self.metric_var.get()
+        self.D = compute_distance_matrix(self.positions, self.metric)
+        self.build_distance_editor()
+        if hasattr(self, 'apply_dist_btn'):
+            self.apply_dist_btn.configure(state='disabled')
 
     def generate_random_problem(self):
         # Read parameters
@@ -378,6 +519,10 @@ class PairwiseExchangeApp(tk.Tk):
             maxf = int(self.max_flow_var.get())
             sparsity = float(self.sparsity_var.get())
             seed = self.seed_var.get().strip()
+            mind = int(self.min_dist_var.get())
+            maxd = int(self.max_dist_var.get())
+            dist_sparsity = float(self.dist_sparsity_var.get())
+            dist_seed = self.dist_seed_var.get().strip()
         except Exception as e:
             messagebox.showerror('Invalid params', f'Check random generator params: {e}')
             return
@@ -417,8 +562,30 @@ class PairwiseExchangeApp(tk.Tk):
             self.cols_var.set(self.grid_cols)
         except Exception:
             pass
-        # only set computed D if not using a custom provided distance matrix
-        if not getattr(self, 'use_custom_dist_var', tk.BooleanVar()).get():
+        # distance matrix: random if custom enabled, otherwise computed from positions
+        if getattr(self, 'use_custom_dist_var', tk.BooleanVar()).get():
+            if dist_seed:
+                random.seed(dist_seed)
+            else:
+                random.seed()
+            newD = [[0.0] * self.n for _ in range(self.n)]
+            for i in range(self.n):
+                for j in range(self.n):
+                    if i == j:
+                        newD[i][j] = 0.0
+                    else:
+                        if random.random() < dist_sparsity:
+                            val = 0.0
+                        else:
+                            val = random.randint(mind, maxd)
+                        newD[i][j] = float(val)
+            if self.sym_dist_var.get():
+                for i in range(self.n):
+                    for j in range(i+1, self.n):
+                        avg = (newD[i][j] + newD[j][i]) / 2.0
+                        newD[i][j] = newD[j][i] = avg
+            self.D = newD
+        else:
             self.D = compute_distance_matrix(self.positions, self.metric_var.get())
 
         # reset history
@@ -429,8 +596,8 @@ class PairwiseExchangeApp(tk.Tk):
     def refresh_all(self):
         self.build_flow_editor()
         self.build_distance_editor()
-        self.build_layout_editor()
         self.refresh_canvas()
+        self._refresh_distance_if_computed()
         self.update_swap_candidates_text()
 
     def build_flow_editor(self):
@@ -451,7 +618,7 @@ class PairwiseExchangeApp(tk.Tk):
             ttk.Label(self.fm_inner, text=self.names[i]).grid(row=1 + i, column=0, padx=2)
             for j in range(self.n):
                 v = tk.StringVar(value=str(int(self.F[i][j]) if self.F[i][j].is_integer() else f'{self.F[i][j]:.2f}'))
-                ent = ttk.Entry(self.fm_inner, textvariable=v, width=6)
+                ent = ttk.Entry(self.fm_inner, textvariable=v, width=self._matrix_entry_width())
                 ent.grid(row=1 + i, column=1 + j, padx=1, pady=1)
                 self.flow_vars[i][j] = v
                 self.flow_entry_widgets[i][j] = ent
@@ -459,8 +626,7 @@ class PairwiseExchangeApp(tk.Tk):
                 ent.bind('<FocusOut>', lambda e, a=i, b=j: self.on_flow_cell_changed(a, b))
                 ent.bind('<KeyRelease>', lambda e, a=i, b=j: self.on_flow_cell_changed(a, b))
 
-        # save button
-        ttk.Button(self.fm_inner, text='Apply Flow Edits', command=self.apply_flow_edits).grid(row=2 + self.n, column=0, columnspan=self.n + 1, pady=6)
+        # apply button lives in shared toolbar
 
     def build_distance_editor(self):
         # clear
@@ -470,22 +636,36 @@ class PairwiseExchangeApp(tk.Tk):
         self.dist_entry_widgets = [[None] * self.n for _ in range(self.n)]
         if not hasattr(self, '_updating_mirror'):
             self._updating_mirror = False
+        use_custom = self.use_custom_dist_var.get()
+        if use_custom:
+            labels = [f'P{j}' for j in range(self.n)]
+            matrix = self.D
+            self.dist_frame.configure(text='Distance Matrix (editable)')
+        else:
+            labels = list(self.names)
+            matrix = [[self.D[self.layout[i]][self.layout[j]] for j in range(self.n)] for i in range(self.n)]
+            self.dist_frame.configure(text='Distance Matrix (current layout)')
         # header
         ttk.Label(self.dist_inner, text='').grid(row=0, column=0)
         for j in range(self.n):
-            ttk.Label(self.dist_inner, text=f'P{j}').grid(row=0, column=1 + j, padx=2)
+            ttk.Label(self.dist_inner, text=labels[j]).grid(row=0, column=1 + j, padx=2)
         for i in range(self.n):
-            ttk.Label(self.dist_inner, text=f'P{i}').grid(row=1 + i, column=0, padx=2)
+            ttk.Label(self.dist_inner, text=labels[i]).grid(row=1 + i, column=0, padx=2)
             for j in range(self.n):
-                v = tk.StringVar(value=str(int(self.D[i][j]) if float(self.D[i][j]).is_integer() else f'{self.D[i][j]:.2f}'))
-                ent = ttk.Entry(self.dist_inner, textvariable=v, width=6)
+                val = matrix[i][j]
+                v = tk.StringVar(value=str(int(val) if float(val).is_integer() else f'{val:.2f}'))
+                ent = ttk.Entry(self.dist_inner, textvariable=v, width=self._matrix_entry_width())
                 ent.grid(row=1 + i, column=1 + j, padx=1, pady=1)
+                if not use_custom:
+                    ent.configure(state='disabled')
                 self.dist_vars[i][j] = v
                 self.dist_entry_widgets[i][j] = ent
-                ent.bind('<FocusOut>', lambda e, a=i, b=j: self.on_dist_cell_changed(a, b))
-                ent.bind('<KeyRelease>', lambda e, a=i, b=j: self.on_dist_cell_changed(a, b))
+                if use_custom:
+                    ent.bind('<FocusOut>', lambda e, a=i, b=j: self.on_dist_cell_changed(a, b))
+                    ent.bind('<KeyRelease>', lambda e, a=i, b=j: self.on_dist_cell_changed(a, b))
 
-        ttk.Button(self.dist_inner, text='Apply Distance Edits', command=self.apply_distance_edits).grid(row=2 + self.n, column=0, columnspan=self.n + 1, pady=6)
+        if hasattr(self, 'apply_dist_btn'):
+            self.apply_dist_btn.configure(state=('normal' if use_custom else 'disabled'))
 
     def apply_distance_edits(self):
         # parse entries; validate
@@ -519,6 +699,8 @@ class PairwiseExchangeApp(tk.Tk):
 
     def on_dist_cell_changed(self, i, j):
         # called when a distance cell is edited; mirror to [j][i] if symmetry requested
+        if not self.use_custom_dist_var.get():
+            return
         if self._updating_mirror:
             return
         try:
@@ -684,6 +866,7 @@ class PairwiseExchangeApp(tk.Tk):
         self.history = []
         self.history_index = -1
         self.refresh_canvas()
+        self._refresh_distance_if_computed()
         self.update_swap_candidates_text()
         self.status_var.set('Applied layout edits')
 
@@ -700,6 +883,7 @@ class PairwiseExchangeApp(tk.Tk):
 
         # draw cells
         pos_index_to_dept = {self.layout[i]: i for i in range(len(self.layout))}
+        self._pos_index_to_dept = pos_index_to_dept
 
         for p_idx in range(rows * cols):
             r = p_idx // cols
@@ -712,7 +896,11 @@ class PairwiseExchangeApp(tk.Tk):
                 if p_idx in pos_index_to_dept:
                     dept = pos_index_to_dept[p_idx]
                     fill = '#cfe8ff'
-                    self.canvas.create_rectangle(x0+2, y0+2, x1-2, y1-2, fill=fill, outline='black')
+                    outline = 'black'
+                    if p_idx in self.highlight_positions:
+                        fill = '#ffe4a3'
+                        outline = '#d59b2d'
+                    self.canvas.create_rectangle(x0+2, y0+2, x1-2, y1-2, fill=fill, outline=outline)
                     self.canvas.create_text((x0 + x1)/2, (y0+y1)/2, text=self.names[dept], font=('Arial', 12, 'bold'))
                     self.canvas.create_text(
                         (x0 + x1) / 2,
@@ -738,6 +926,125 @@ class PairwiseExchangeApp(tk.Tk):
         # show cost
         current_cost = total_cost(self.F, self.D, self.layout)
         self.canvas.create_text(10, 10, anchor='nw', text=f'Cost: {current_cost:.2f}', font=('Arial', 12, 'bold'))
+
+    def _cell_from_xy(self, x, y):
+        rows = self.grid_rows
+        cols = self.grid_cols
+        w = self.canvas.winfo_width() or 640
+        h = self.canvas.winfo_height() or 480
+        cell_w = w / max(cols, 1)
+        cell_h = h / max(rows, 1)
+        c = int(x // cell_w)
+        r = int(y // cell_h)
+        if r < 0 or c < 0 or r >= rows or c >= cols:
+            return None
+        p_idx = r * cols + c
+        if p_idx >= len(self.positions):
+            return None
+        return p_idx
+
+    def _cell_bounds(self, p_idx):
+        rows = self.grid_rows
+        cols = self.grid_cols
+        w = self.canvas.winfo_width() or 640
+        h = self.canvas.winfo_height() or 480
+        cell_w = w / max(cols, 1)
+        cell_h = h / max(rows, 1)
+        r = p_idx // cols
+        c = p_idx % cols
+        x0 = c * cell_w
+        y0 = r * cell_h
+        x1 = x0 + cell_w
+        y1 = y0 + cell_h
+        return x0, y0, x1, y1
+
+    def _draw_drag_outline(self, p_idx, color):
+        self.canvas.delete('drag_outline')
+        if p_idx is None:
+            return
+        x0, y0, x1, y1 = self._cell_bounds(p_idx)
+        self.canvas.create_rectangle(
+            x0 + 3, y0 + 3, x1 - 3, y1 - 3,
+            outline=color, width=2, dash=(3, 2),
+            tags='drag_outline'
+        )
+
+    def _draw_drag_active(self, p_idx):
+        self.canvas.delete('drag_active')
+        if p_idx is None:
+            return
+        x0, y0, x1, y1 = self._cell_bounds(p_idx)
+        self.canvas.create_rectangle(
+            x0 + 2, y0 + 2, x1 - 2, y1 - 2,
+            outline='#f08a24', width=3,
+            fill='#ffd27f', stipple='gray50',
+            tags='drag_active'
+        )
+
+    def _schedule_swap_highlight(self, positions):
+        self.highlight_positions = set(p for p in positions if p is not None)
+        if self.highlight_after_id:
+            self.after_cancel(self.highlight_after_id)
+            self.highlight_after_id = None
+        self.refresh_canvas()
+        self.highlight_after_id = self.after(2500, self._clear_swap_highlight)
+
+    def _clear_swap_highlight(self):
+        self.highlight_positions = set()
+        self.highlight_after_id = None
+        self.refresh_canvas()
+
+    def on_canvas_press(self, event):
+        p_idx = self._cell_from_xy(event.x, event.y)
+        if p_idx is None:
+            return
+        dept = getattr(self, '_pos_index_to_dept', {}).get(p_idx)
+        if dept is None:
+            return
+        self.drag_active = True
+        self.drag_dept = dept
+        self.drag_start_pos = p_idx
+        self.drag_over_pos = p_idx
+        self._draw_drag_active(p_idx)
+        self._draw_drag_outline(p_idx, '#5a8edb')
+        self.status_var.set(f'Dragging {self.names[dept]} from P{p_idx}')
+
+    def on_canvas_drag(self, event):
+        if not self.drag_active:
+            return
+        p_idx = self._cell_from_xy(event.x, event.y)
+        if p_idx != self.drag_over_pos:
+            self.drag_over_pos = p_idx
+            self._draw_drag_outline(p_idx, '#9aa0a6')
+
+    def on_canvas_release(self, event):
+        if not self.drag_active:
+            return
+        target = self._cell_from_xy(event.x, event.y)
+        source = self.drag_start_pos
+        self.drag_active = False
+        self.drag_dept = None
+        self.drag_start_pos = None
+        self.drag_over_pos = None
+        self.canvas.delete('drag_outline')
+        self.canvas.delete('drag_active')
+        if target is None or source is None or target == source:
+            self.status_var.set('Drop on another occupied cell to swap')
+            return
+        target_dept = getattr(self, '_pos_index_to_dept', {}).get(target)
+        if target_dept is None:
+            self.status_var.set('Drop on another occupied cell to swap')
+            return
+        a = target_dept
+        b = getattr(self, '_pos_index_to_dept', {}).get(source)
+        if a is None or b is None or a == b:
+            return
+        self.layout[a], self.layout[b] = self.layout[b], self.layout[a]
+        self._refresh_distance_if_computed()
+        self.refresh_canvas()
+        self.update_swap_candidates_text()
+        self._schedule_swap_highlight([source, target])
+        self.status_var.set(f'Swapped {self.names[a]} and {self.names[b]}')
 
     # ---------- Swap candidate listing and selection ----------
     def compute_all_candidate_deltas(self):
@@ -769,6 +1076,70 @@ class PairwiseExchangeApp(tk.Tk):
             self.swap_text.insert('end', '\nBest improving swap: {} <-> {} ΔC={:.4f}\n'.format(self.names[best[0][0]], self.names[best[0][1]], best[1]))
         else:
             self.swap_text.insert('end', '\nNo improving swap exists (local optimum)\n')
+
+    def show_quick_help(self):
+        msg = (
+            "Quick Guide\n"
+            "1) Set n and (optional) Rows/Cols\n"
+            "2) Use Random Generator OR enter your own values in matrices\n"
+            "3) Apply Flow/Distance Edits after manual changes\n"
+            "4) Drag to swap departments or use Next Step\n"
+            "5) Run to End to finish\n"
+            "Notes:\n"
+            "- Rows×Cols must be >= n\n"
+            "- Custom Distance ON enables distance editing\n"
+            "- Apply buttons are above the matrices\n"
+        )
+        messagebox.showinfo('Quick Guide', msg)
+
+    def _matrix_entry_width(self):
+        if self.n >= 11:
+            return 4
+        if self.n >= 9:
+            return 5
+        return 6
+
+    def _add_info_button(self, frame, text):
+        try:
+            bg = frame.cget('background')
+        except Exception:
+            bg = '#f0f0f0'
+        canvas = tk.Canvas(frame, width=18, height=18, highlightthickness=0, bg=bg)
+        canvas.place(relx=1.0, rely=1.0, x=-6, y=-6, anchor='se')
+        bubble = canvas.create_oval(2, 2, 16, 16, fill='#e9e9e9', outline='#cfcfcf')
+        label = canvas.create_text(9, 9, text='i', fill='#888888', font=('Arial', 8, 'bold'))
+        self._attach_tooltip(canvas, text)
+        canvas.tag_bind(bubble, '<Enter>', lambda e: self._show_tooltip(canvas, text))
+        canvas.tag_bind(bubble, '<Leave>', lambda e: self._hide_tooltip(canvas))
+        canvas.tag_bind(label, '<Enter>', lambda e: self._show_tooltip(canvas, text))
+        canvas.tag_bind(label, '<Leave>', lambda e: self._hide_tooltip(canvas))
+        return canvas
+
+    def _attach_tooltip(self, widget, text):
+        widget._tooltip_text = text
+        widget._tooltip_win = None
+        widget.bind('<Enter>', lambda e: self._show_tooltip(widget, text))
+        widget.bind('<Leave>', lambda e: self._hide_tooltip(widget))
+
+    def _show_tooltip(self, widget, text):
+        if getattr(widget, '_tooltip_win', None) is not None:
+            return
+        win = tk.Toplevel(self)
+        win.wm_overrideredirect(True)
+        win.attributes('-topmost', True)
+        bg = '#f0f0f0'
+        label = ttk.Label(win, text=text, background=bg, relief='solid', borderwidth=1)
+        label.pack(ipadx=6, ipady=4)
+        x = widget.winfo_rootx() + 10
+        y = widget.winfo_rooty() + widget.winfo_height() + 6
+        win.wm_geometry(f'+{x}+{y}')
+        widget._tooltip_win = win
+
+    def _hide_tooltip(self, widget):
+        win = getattr(widget, '_tooltip_win', None)
+        if win is not None:
+            win.destroy()
+            widget._tooltip_win = None
 
     # ---------- Algorithm steps and control ----------
     def next_step(self):
@@ -814,6 +1185,7 @@ class PairwiseExchangeApp(tk.Tk):
         self.history_index = len(self.history) - 1
 
         self.refresh_canvas()
+        self._refresh_distance_if_computed()
         self.update_swap_candidates_text()
         self.status_var.set(f'Applied swap {self.names[a]}<->{self.names[b]} (ΔC={efficient_delta:.4f})')
 
@@ -843,6 +1215,7 @@ class PairwiseExchangeApp(tk.Tk):
             self.status_var.set(f'Reverted swap {self.names[a]}<->{self.names[b]}')
 
         self.refresh_canvas()
+        self._refresh_distance_if_computed()
         self.update_swap_candidates_text()
 
     def reset_to_initial(self):
@@ -859,6 +1232,7 @@ class PairwiseExchangeApp(tk.Tk):
         self.history = []
         self.history_index = -1
         self.refresh_canvas()
+        self._refresh_distance_if_computed()
         self.update_swap_candidates_text()
         self.status_var.set(f'Reset to initial (undid {cnt} swaps)')
 
