@@ -28,10 +28,7 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 import math
 import random
-import itertools
 import csv
-import io
-import time
 
 # ---------- Utility functions ----------
 
@@ -125,6 +122,10 @@ class PairwiseExchangeApp(tk.Tk):
         super().__init__()
         self.title('Pairwise Exchange Method - Teaching App')
         self.geometry('1200x780')
+        try:
+            self.state('zoomed')
+        except Exception:
+            pass
 
         # Model state
         self.n = 9
@@ -150,7 +151,6 @@ class PairwiseExchangeApp(tk.Tk):
         self.run_after_id = None
         # Drag-and-drop state for swapping departments
         self.drag_active = False
-        self.drag_dept = None
         self.drag_start_pos = None
         self.drag_over_pos = None
         # Temporary highlight after swaps
@@ -162,6 +162,7 @@ class PairwiseExchangeApp(tk.Tk):
 
         # Initialize default empty problem state
         self.refresh_all()
+        self.after(50, self.refresh_canvas)
 
     # ---------- UI building ----------
     def create_widgets(self):
@@ -352,13 +353,18 @@ class PairwiseExchangeApp(tk.Tk):
         # Top: layout visualization
         viz_frame = ttk.LabelFrame(content_frame, text='Layout Visualization', padding=6)
         viz_frame.pack(fill='both', expand=True)
-        self._add_info_button(
-            viz_frame,
-            "Drag departments to swap positions.\n"
-            "P# labels show grid positions."
-        )
+        viz_frame.columnconfigure(0, weight=1)
+        viz_frame.rowconfigure(0, weight=1)
         self.canvas = tk.Canvas(viz_frame, width=640, height=480, bg='white')
-        self.canvas.pack(fill='both', expand=True)
+        self.canvas.grid(row=0, column=0, sticky='nsew')
+        self.drag_hint_label = ttk.Label(
+            viz_frame,
+            text='Tip: Drag and drop to swap any two departments (P# shows positions).',
+            foreground='#666666',
+            font=('Arial', 9, 'italic')
+        )
+        self.drag_hint_label.grid(row=1, column=0, sticky='e', pady=(4, 0))
+        self.canvas.bind('<Configure>', lambda e: self.refresh_canvas())
         self.canvas.bind('<ButtonPress-1>', self.on_canvas_press)
         self.canvas.bind('<B1-Motion>', self.on_canvas_drag)
         self.canvas.bind('<ButtonRelease-1>', self.on_canvas_release)
@@ -556,12 +562,21 @@ class PairwiseExchangeApp(tk.Tk):
         random.shuffle(arr)
         self.layout = arr
 
-        self.positions, self.grid_rows, self.grid_cols = make_grid_positions(self.n)
+        # keep current rows/cols if valid, otherwise compute a new grid
         try:
-            self.rows_var.set(self.grid_rows)
-            self.cols_var.set(self.grid_cols)
+            r = int(self.rows_var.get())
+            c = int(self.cols_var.get())
         except Exception:
-            pass
+            r, c = None, None
+        if r and c and r > 0 and c > 0 and r * c >= self.n:
+            self.positions, self.grid_rows, self.grid_cols = make_grid_positions(self.n, rows=r, cols=c)
+        else:
+            self.positions, self.grid_rows, self.grid_cols = make_grid_positions(self.n)
+            try:
+                self.rows_var.set(self.grid_rows)
+                self.cols_var.set(self.grid_cols)
+            except Exception:
+                pass
         # distance matrix: random if custom enabled, otherwise computed from positions
         if getattr(self, 'use_custom_dist_var', tk.BooleanVar()).get():
             if dist_seed:
@@ -810,66 +825,6 @@ class PairwiseExchangeApp(tk.Tk):
             self.D = compute_distance_matrix(self.positions, self.metric)
         self.refresh_all()
 
-    def build_layout_editor(self):
-        for child in self.layout_editor_container.winfo_children():
-            child.destroy()
-        self.layout_vars = []
-        self.layout_pos_vars = []
-        header = ttk.Frame(self.layout_editor_container)
-        header.pack(fill='x', pady=(2, 4))
-        ttk.Label(header, text='Department', width=12).pack(side='left')
-        ttk.Label(header, text='->', width=3).pack(side='left')
-        ttk.Label(header, text='Position (P#)', width=12).pack(side='left')
-        ttk.Label(header, text='Grid cell (row,col)').pack(side='left')
-        for i in range(self.n):
-            row = ttk.Frame(self.layout_editor_container)
-            row.pack(fill='x')
-            ttk.Label(row, text=self.names[i], width=12).pack(side='left')
-            ttk.Label(row, text='->', width=3).pack(side='left')
-            sv = tk.IntVar(value=self.layout[i])
-            self.layout_vars.append(sv)
-            cb = ttk.Combobox(row, textvariable=sv, values=list(range(len(self.positions))), width=6)
-            cb.pack(side='left', padx=4)
-            pos_info = tk.StringVar(value=self._format_position_info(self.layout[i]))
-            self.layout_pos_vars.append(pos_info)
-            ttk.Label(row, textvariable=pos_info).pack(side='left')
-            cb.bind('<<ComboboxSelected>>', lambda e, idx=i: self.update_layout_position_label(idx))
-            cb.bind('<FocusOut>', lambda e, idx=i: self.update_layout_position_label(idx))
-        ttk.Button(self.layout_editor_container, text='Apply Layout Edits', command=self.apply_layout_edits).pack(pady=4)
-
-    def _format_position_info(self, pos_index):
-        try:
-            r, c = self.positions[int(pos_index)]
-        except Exception:
-            return '(invalid)'
-        return f'P{int(pos_index)} = ({r},{c})'
-
-    def update_layout_position_label(self, idx):
-        try:
-            pos_index = int(self.layout_vars[idx].get())
-        except Exception:
-            self.layout_pos_vars[idx].set('(invalid)')
-            return
-        self.layout_pos_vars[idx].set(self._format_position_info(pos_index))
-
-    def apply_layout_edits(self):
-        try:
-            new_layout = [int(v.get()) for v in self.layout_vars]
-        except Exception as e:
-            messagebox.showerror('Invalid layout', f'{e}')
-            return
-        # validate uniqueness
-        if len(set(new_layout)) != len(new_layout):
-            messagebox.showerror('Invalid layout', 'Positions must be unique assignments')
-            return
-        self.layout = new_layout
-        self.history = []
-        self.history_index = -1
-        self.refresh_canvas()
-        self._refresh_distance_if_computed()
-        self.update_swap_candidates_text()
-        self.status_var.set('Applied layout edits')
-
     # ---------- Visualization ----------
     def refresh_canvas(self):
         self.canvas.delete('all')
@@ -1002,17 +957,46 @@ class PairwiseExchangeApp(tk.Tk):
         if dept is None:
             return
         self.drag_active = True
-        self.drag_dept = dept
         self.drag_start_pos = p_idx
         self.drag_over_pos = p_idx
         self._draw_drag_active(p_idx)
         self._draw_drag_outline(p_idx, '#5a8edb')
+        self.canvas.delete('drag_ghost')
+        text_id = self.canvas.create_text(
+            event.x, event.y,
+            text=self.names[dept],
+            font=('Arial', 12, 'bold'),
+            fill='#555555',
+            tags='drag_ghost'
+        )
+        bbox = self.canvas.bbox(text_id)
+        if bbox:
+            x0, y0, x1, y1 = bbox
+            pad = 6
+            rect_id = self.canvas.create_rectangle(
+                x0 - pad, y0 - pad, x1 + pad, y1 + pad,
+                fill='#ffe4a3', outline='#d59b2d',
+                tags='drag_ghost'
+            )
+            self.canvas.tag_raise(text_id, rect_id)
         self.status_var.set(f'Dragging {self.names[dept]} from P{p_idx}')
 
     def on_canvas_drag(self, event):
         if not self.drag_active:
             return
         p_idx = self._cell_from_xy(event.x, event.y)
+        # update ghost box + text
+        items = self.canvas.find_withtag('drag_ghost')
+        if items:
+            # text item is expected to be last (raised above box)
+            text_id = items[-1]
+            self.canvas.coords(text_id, event.x, event.y)
+            bbox = self.canvas.bbox(text_id)
+            if bbox and len(items) > 1:
+                x0, y0, x1, y1 = bbox
+                pad = 6
+                rect_id = items[0]
+                self.canvas.coords(rect_id, x0 - pad, y0 - pad, x1 + pad, y1 + pad)
         if p_idx != self.drag_over_pos:
             self.drag_over_pos = p_idx
             self._draw_drag_outline(p_idx, '#9aa0a6')
@@ -1023,11 +1007,11 @@ class PairwiseExchangeApp(tk.Tk):
         target = self._cell_from_xy(event.x, event.y)
         source = self.drag_start_pos
         self.drag_active = False
-        self.drag_dept = None
         self.drag_start_pos = None
         self.drag_over_pos = None
         self.canvas.delete('drag_outline')
         self.canvas.delete('drag_active')
+        self.canvas.delete('drag_ghost')
         if target is None or source is None or target == source:
             self.status_var.set('Drop on another occupied cell to swap')
             return
@@ -1087,8 +1071,7 @@ class PairwiseExchangeApp(tk.Tk):
             "5) Run to End to finish\n"
             "Notes:\n"
             "- Rows×Cols must be >= n\n"
-            "- Custom Distance ON enables distance editing\n"
-            "- Apply buttons are above the matrices\n"
+            "- Custom Distance ON enables distance editing otherwise it depends on the current layout\n"
         )
         messagebox.showinfo('Quick Guide', msg)
 
@@ -1104,10 +1087,13 @@ class PairwiseExchangeApp(tk.Tk):
             bg = frame.cget('background')
         except Exception:
             bg = '#f0f0f0'
+        if bg in (None, '', 'SystemButtonFace'):
+            bg = self.cget('bg')
         canvas = tk.Canvas(frame, width=18, height=18, highlightthickness=0, bg=bg)
+        canvas._tooltip_bg = bg
         canvas.place(relx=1.0, rely=1.0, x=-6, y=-6, anchor='se')
-        bubble = canvas.create_oval(2, 2, 16, 16, fill='#e9e9e9', outline='#cfcfcf')
-        label = canvas.create_text(9, 9, text='i', fill='#888888', font=('Arial', 8, 'bold'))
+        bubble = canvas.create_oval(2, 2, 16, 16, fill=bg, outline=bg)
+        label = canvas.create_text(9, 9, text='i', fill='#9a9a9a', font=('Arial', 8, 'bold'))
         self._attach_tooltip(canvas, text)
         canvas.tag_bind(bubble, '<Enter>', lambda e: self._show_tooltip(canvas, text))
         canvas.tag_bind(bubble, '<Leave>', lambda e: self._hide_tooltip(canvas))
@@ -1127,8 +1113,8 @@ class PairwiseExchangeApp(tk.Tk):
         win = tk.Toplevel(self)
         win.wm_overrideredirect(True)
         win.attributes('-topmost', True)
-        bg = '#f0f0f0'
-        label = ttk.Label(win, text=text, background=bg, relief='solid', borderwidth=1)
+        bg = getattr(widget, '_tooltip_bg', '#f0f0f0')
+        label = tk.Label(win, text=text, bg=bg, relief='solid', borderwidth=1)
         label.pack(ipadx=6, ipady=4)
         x = widget.winfo_rootx() + 10
         y = widget.winfo_rooty() + widget.winfo_height() + 6
